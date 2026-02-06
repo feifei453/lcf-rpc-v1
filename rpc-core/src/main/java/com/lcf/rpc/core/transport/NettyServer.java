@@ -2,6 +2,8 @@ package com.lcf.rpc.core.transport;
 
 import com.lcf.rpc.common.model.RpcRequest;
 import com.lcf.rpc.common.model.RpcResponse;
+import com.lcf.rpc.core.netty.codec.RpcMessageDecoder;
+import com.lcf.rpc.core.netty.codec.RpcMessageEncoder;
 import com.lcf.rpc.core.netty.handler.CommonDecoder;
 import com.lcf.rpc.core.netty.handler.CommonEncoder;
 import com.lcf.rpc.core.netty.handler.NettyServerHandler;
@@ -47,14 +49,9 @@ public class NettyServer {
                             // 📥 入站 (Byte -> Object): 解码器 -> Handler
                             // 📤 出站 (Object -> Byte): 编码器
 
-                            // 1. 编码器 (用于发送 RpcResponse)
-                            ch.pipeline().addLast(new CommonEncoder(serializer));
-
-                            // 2. 解码器 (用于接收 RpcRequest)
-                            // 注意：服务端收到的是 Request
-                            ch.pipeline().addLast(new CommonDecoder(serializer, RpcRequest.class));
-
-                            // 3. 业务处理器
+                            // 替换原来的编解码器
+                            ch.pipeline().addLast(new RpcMessageEncoder(serializer));
+                            ch.pipeline().addLast(new RpcMessageDecoder(serializer));
                             ch.pipeline().addLast(new NettyServerHandler());
                         }
                     });

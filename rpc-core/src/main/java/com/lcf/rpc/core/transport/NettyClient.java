@@ -1,9 +1,8 @@
 package com.lcf.rpc.core.transport;
 
-import com.lcf.rpc.common.model.RpcRequest;
-import com.lcf.rpc.common.model.RpcResponse;
-import com.lcf.rpc.core.netty.handler.CommonDecoder;
-import com.lcf.rpc.core.netty.handler.CommonEncoder;
+import com.lcf.rpc.common.model.RpcMessage;
+import com.lcf.rpc.core.netty.codec.RpcMessageDecoder;
+import com.lcf.rpc.core.netty.codec.RpcMessageEncoder;
 import com.lcf.rpc.core.netty.handler.NettyClientHandler;
 import com.lcf.rpc.core.serialization.JdkSerializer;
 import com.lcf.rpc.core.serialization.Serializer;
@@ -17,59 +16,57 @@ import lombok.extern.slf4j.Slf4j;
 @Slf4j
 public class NettyClient {
 
-    public void sendRequest(RpcRequest rpcRequest) {
-        // 1. 创建线程组 (Client 一般只需要一个线程组)
+
+    public void sendRequest(RpcMessage rpcMessage) {
         EventLoopGroup group = new NioEventLoopGroup();
 
         try {
-            // 2. 创建启动助手
             Bootstrap bootstrap = new Bootstrap();
-
-            // 3. 配置参数
             bootstrap.group(group)
-                    .channel(NioSocketChannel.class) // 指定使用 NIO
-                    // 在 NettyClient.java 中找到这一段
+                    .channel(NioSocketChannel.class)
+                    .option(ChannelOption.SO_KEEPALIVE, true) // 开启 TCP Keepalive
                     .handler(new ChannelInitializer<SocketChannel>() {
                         @Override
                         protected void initChannel(SocketChannel ch) {
+                            ChannelPipeline pipeline = ch.pipeline();
+
+                            // 这里先临时写死用 JDK 序列化，后续会优化
                             Serializer serializer = new JdkSerializer();
 
-                            // --- 新增: 解码器 (为了看懂服务端的回复) ---
-                            // 客户端收到的是 RpcResponse
-                            ch.pipeline().addLast(new CommonDecoder(serializer, RpcResponse.class));
+                            // ⚠️ 修改点2：使用自定义协议的编解码器
+                            // 编码器：RpcMessage -> ByteBuf
+                            pipeline.addLast(new RpcMessageEncoder(serializer));
 
-                            // 原有的编码器
-                            ch.pipeline().addLast(new CommonEncoder(serializer));
+                            // 解码器：ByteBuf -> RpcMessage
+                            // 注意：Decoder 里已经处理了粘包和半包逻辑
+                            pipeline.addLast(new RpcMessageDecoder(serializer));
 
-                            // 原有的业务 Handler
-                            ch.pipeline().addLast(new NettyClientHandler());
+                            // 业务处理器
+                            pipeline.addLast(new NettyClientHandler());
                         }
                     });
 
-            // 4. 连接服务端 (这里先写死本地，测试用)
             ChannelFuture future = bootstrap.connect("127.0.0.1", 8080).sync();
             log.info("客户端连接成功....");
 
-            // 5. 发送数据
-            // Netty 是异步的，writeAndFlush 会经过 Pipeline 里的 CommonEncoder
             Channel channel = future.channel();
             if (channel != null) {
-                channel.writeAndFlush(rpcRequest).addListener(future1 -> {
+                // ⚠️ 修改点3：发送协议包
+                channel.writeAndFlush(rpcMessage).addListener(future1 -> {
                     if(future1.isSuccess()) {
-                        log.info("请求发送成功: {}", rpcRequest.getRequestId());
+                        // 这里打印一下日志，方便调试
+                        log.info("协议包发送成功，消息类型: {}", rpcMessage.getMessageType());
                     } else {
-                        log.error("请求发送失败:", future1.cause());
+                        log.error("发送失败:", future1.cause());
                     }
                 });
 
-                // 阻塞等待关闭，防止主线程立刻退出
                 channel.closeFuture().sync();
             }
 
         } catch (InterruptedException e) {
             log.error("客户端异常", e);
         } finally {
-            // 6. 优雅关闭线程组
             group.shutdownGracefully();
         }
     }
