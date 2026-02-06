@@ -1,6 +1,7 @@
 package com.lcf.rpc.core.transport;
 
 import com.lcf.rpc.common.model.RpcMessage;
+import com.lcf.rpc.common.model.RpcResponse;
 import com.lcf.rpc.core.netty.codec.RpcMessageDecoder;
 import com.lcf.rpc.core.netty.codec.RpcMessageEncoder;
 import com.lcf.rpc.core.netty.handler.NettyClientHandler;
@@ -13,61 +14,65 @@ import io.netty.channel.socket.SocketChannel;
 import io.netty.channel.socket.nio.NioSocketChannel;
 import lombok.extern.slf4j.Slf4j;
 
+import java.util.concurrent.CompletableFuture;
+
 @Slf4j
 public class NettyClient {
 
+    private final UnprocessedRequests unprocessedRequests;
 
-    public void sendRequest(RpcMessage rpcMessage) {
+    public NettyClient() {
+        this.unprocessedRequests = new UnprocessedRequests();
+    }
+
+    // ⚠️ 修改点1：返回值改为 CompletableFuture<RpcResponse>
+    public CompletableFuture<RpcResponse> sendRequest(RpcMessage rpcMessage) {
+        CompletableFuture<RpcResponse> resultFuture = new CompletableFuture<>();
+
         EventLoopGroup group = new NioEventLoopGroup();
-
         try {
             Bootstrap bootstrap = new Bootstrap();
             bootstrap.group(group)
                     .channel(NioSocketChannel.class)
-                    .option(ChannelOption.SO_KEEPALIVE, true) // 开启 TCP Keepalive
+                    .option(ChannelOption.SO_KEEPALIVE, true)
                     .handler(new ChannelInitializer<SocketChannel>() {
                         @Override
                         protected void initChannel(SocketChannel ch) {
-                            ChannelPipeline pipeline = ch.pipeline();
-
-                            // 这里先临时写死用 JDK 序列化，后续会优化
                             Serializer serializer = new JdkSerializer();
-
-                            // ⚠️ 修改点2：使用自定义协议的编解码器
-                            // 编码器：RpcMessage -> ByteBuf
-                            pipeline.addLast(new RpcMessageEncoder(serializer));
-
-                            // 解码器：ByteBuf -> RpcMessage
-                            // 注意：Decoder 里已经处理了粘包和半包逻辑
-                            pipeline.addLast(new RpcMessageDecoder(serializer));
-
-                            // 业务处理器
-                            pipeline.addLast(new NettyClientHandler());
+                            ch.pipeline().addLast(new RpcMessageEncoder(serializer));
+                            ch.pipeline().addLast(new RpcMessageDecoder(serializer));
+                            // ⚠️ 修改点2：Handler 需要传入 unprocessedRequests，以便收到消息时处理
+                            ch.pipeline().addLast(new NettyClientHandler(unprocessedRequests));
                         }
                     });
 
-            ChannelFuture future = bootstrap.connect("127.0.0.1", 8080).sync();
-            log.info("客户端连接成功....");
+            ChannelFuture channelFuture = bootstrap.connect("127.0.0.1", 8080).sync();
 
-            Channel channel = future.channel();
-            if (channel != null) {
-                // ⚠️ 修改点3：发送协议包
-                channel.writeAndFlush(rpcMessage).addListener(future1 -> {
-                    if(future1.isSuccess()) {
-                        // 这里打印一下日志，方便调试
-                        log.info("协议包发送成功，消息类型: {}", rpcMessage.getMessageType());
-                    } else {
-                        log.error("发送失败:", future1.cause());
-                    }
-                });
+            // ⚠️ 修改点3：在发送前，先把 future 存起来
+            // 注意：这里需要从 rpcMessage 里拿出 requestId。
+            // 假设我们约定 RpcRequest 在 data 字段里 (虽然 data 是 Object，强转一下)
+            // (稍微有点丑陋，V2版本我们会优化这里)
+            com.lcf.rpc.common.model.RpcRequest req = (com.lcf.rpc.common.model.RpcRequest) rpcMessage.getData();
+            unprocessedRequests.put(req.getRequestId(), resultFuture);
 
-                channel.closeFuture().sync();
-            }
+            Channel channel = channelFuture.channel();
+            channel.writeAndFlush(rpcMessage).addListener((ChannelFutureListener) future -> {
+                if (future.isSuccess()) {
+                    log.info("请求发送成功: {}", req.getRequestId());
+                } else {
+                    future.cause().printStackTrace();
+                    resultFuture.completeExceptionally(future.cause());
+                }
+            });
+
+            // ⚠️ 注意：这里不能关闭 channel，也不能关闭 group！
+            // 因为我们要等待服务器发回响应。如果关了，谁来接收？
 
         } catch (InterruptedException e) {
-            log.error("客户端异常", e);
-        } finally {
-            group.shutdownGracefully();
+            resultFuture.completeExceptionally(e);
+            Thread.currentThread().interrupt();
         }
+
+        return resultFuture;
     }
 }
