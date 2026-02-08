@@ -1,4 +1,4 @@
-package com.lcf.rpc.core;
+package com.lcf.rpc.demo.test;
 
 import com.lcf.rpc.core.transport.NettyServer;
 import org.springframework.context.annotation.AnnotationConfigApplicationContext;

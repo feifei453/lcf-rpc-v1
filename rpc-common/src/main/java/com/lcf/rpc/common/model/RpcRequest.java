@@ -8,6 +8,7 @@ import lombok.Data;
 import lombok.NoArgsConstructor;
 
 import java.io.Serializable;
+import java.util.Map;
 
 /**
  * RPC 请求传输对象
@@ -57,4 +58,8 @@ public class RpcRequest implements Serializable {
     // ----------- 进阶扩展字段 (V2.0 版本再考虑) -----------
     // private String version; // 服务版本号 (如 v1.0, v2.0)，用于灰度发布
     // private String group;   // 服务分组
+
+    // 隐式参数背包 (用于存放 Token, TraceId 等)
+    // 拦截器里的数据才能跟着请求发到服务端
+    private Map<String, Object> attachments;
 }

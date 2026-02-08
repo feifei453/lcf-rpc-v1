@@ -1,4 +1,5 @@
 package com.lcf.rpc.core.filter;
 
-public class Filter {
+public interface Filter {
+    void doFilter(FilterData filterData);
 }

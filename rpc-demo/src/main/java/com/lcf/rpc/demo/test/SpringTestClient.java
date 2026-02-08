@@ -1,4 +1,4 @@
-package com.lcf.rpc.core;
+package com.lcf.rpc.demo.test;
 
 import com.lcf.rpc.demo.consumer.HelloController;
 import org.springframework.context.annotation.AnnotationConfigApplicationContext;
@@ -8,7 +8,7 @@ import org.springframework.context.annotation.Configuration;
 @Configuration
 @ComponentScan("com.lcf.rpc")
 public class SpringTestClient {
-    public static void main(String[] args) {
+    public static void main(String[] args) throws InterruptedException {
         // 1. 启动 Spring 容器
         AnnotationConfigApplicationContext context = new AnnotationConfigApplicationContext(SpringTestClient.class);
 

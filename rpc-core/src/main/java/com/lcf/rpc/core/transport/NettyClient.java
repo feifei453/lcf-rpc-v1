@@ -1,5 +1,6 @@
 package com.lcf.rpc.core.transport;
 
+import com.lcf.rpc.common.extension.ExtensionLoader;
 import com.lcf.rpc.common.model.RpcMessage;
 import com.lcf.rpc.common.model.RpcResponse;
 import com.lcf.rpc.core.netty.codec.RpcMessageDecoder;
@@ -14,6 +15,7 @@ import io.netty.channel.socket.SocketChannel;
 import io.netty.channel.socket.nio.NioSocketChannel;
 import lombok.extern.slf4j.Slf4j;
 
+import java.net.InetSocketAddress;
 import java.util.concurrent.CompletableFuture;
 
 @Slf4j
@@ -26,7 +28,7 @@ public class NettyClient {
     }
 
     // ⚠️ 修改点1：返回值改为 CompletableFuture<RpcResponse>
-    public CompletableFuture<RpcResponse> sendRequest(RpcMessage rpcMessage) {
+    public CompletableFuture<RpcResponse> sendRequest(RpcMessage rpcMessage, InetSocketAddress inetSocketAddress) {
         CompletableFuture<RpcResponse> resultFuture = new CompletableFuture<>();
 
         EventLoopGroup group = new NioEventLoopGroup();
@@ -38,15 +40,16 @@ public class NettyClient {
                     .handler(new ChannelInitializer<SocketChannel>() {
                         @Override
                         protected void initChannel(SocketChannel ch) {
-                            Serializer serializer = new JdkSerializer();
-                            ch.pipeline().addLast(new RpcMessageEncoder(serializer));
-                            ch.pipeline().addLast(new RpcMessageDecoder(serializer));
+                            ChannelPipeline pipeline = ch.pipeline();
+                            Serializer serializer = ExtensionLoader.getExtensionLoader(Serializer.class).getExtension("json");
+                            pipeline.addLast(new RpcMessageEncoder(serializer));
+                            pipeline.addLast(new RpcMessageDecoder(serializer));
                             // ⚠️ 修改点2：Handler 需要传入 unprocessedRequests，以便收到消息时处理
-                            ch.pipeline().addLast(new NettyClientHandler(unprocessedRequests));
+                            pipeline.addLast(new NettyClientHandler(unprocessedRequests));
                         }
                     });
 
-            ChannelFuture channelFuture = bootstrap.connect("127.0.0.1", 8080).sync();
+            ChannelFuture channelFuture = bootstrap.connect(inetSocketAddress).sync();
 
             // ⚠️ 修改点3：在发送前，先把 future 存起来
             // 注意：这里需要从 rpcMessage 里拿出 requestId。

@@ -1,5 +1,6 @@
 package com.lcf.rpc.core.transport;
 
+import com.lcf.rpc.common.extension.ExtensionLoader;
 import com.lcf.rpc.common.model.RpcRequest;
 import com.lcf.rpc.common.model.RpcResponse;
 import com.lcf.rpc.core.netty.codec.RpcMessageDecoder;
@@ -43,7 +44,7 @@ public class NettyServer {
                     .childHandler(new ChannelInitializer<SocketChannel>() {
                         @Override
                         protected void initChannel(SocketChannel ch) {
-                            Serializer serializer = new JdkSerializer();
+                            Serializer serializer = ExtensionLoader.getExtensionLoader(Serializer.class).getExtension("json");
 
                             // Pipeline 就像工厂流水线，顺序非常重要！
                             // 📥 入站 (Byte -> Object): 解码器 -> Handler
