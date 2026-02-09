@@ -1,0 +1,3 @@
+random=com.lcf.rpc.core.loadbalancer.RandomLoadBalancer
+roundRobin=com.lcf.rpc.core.loadbalancer.RoundRobinLoadBalancer
+consistentHash=com.lcf.rpc.core.loadbalancer.ConsistentHashLoadBalancer

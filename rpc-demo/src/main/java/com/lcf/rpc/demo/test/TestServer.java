@@ -1,5 +1,6 @@
 package com.lcf.rpc.demo.test;
 
+import com.lcf.rpc.common.extension.ExtensionLoader;
 import com.lcf.rpc.core.provider.ServiceProviderImpl;
 import com.lcf.rpc.core.transport.NettyServer;
 import com.lcf.rpc.demo.api.HelloService;
@@ -20,8 +21,7 @@ public class TestServer {
         serviceProvider.addServiceProvider(helloService);
 
         // 2. ⚠️ 新增：远程注册 (告诉 Nacos 我在哪)
-        Registry registry = new NacosRegistry();
-
+        Registry registry = ExtensionLoader.getExtensionLoader(Registry.class).getExtension("zookeeper");
         // 获取本机 IP (在云服务器或Docker中可能需要特定配置，这里先用 getLocalHost)
         // 端口我们要和 NettyServer 保持一致
         try {

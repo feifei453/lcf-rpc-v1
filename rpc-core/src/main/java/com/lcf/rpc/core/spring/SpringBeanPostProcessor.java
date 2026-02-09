@@ -1,11 +1,11 @@
 package com.lcf.rpc.core.spring;
 
+import com.lcf.rpc.common.extension.ExtensionLoader;
 import com.lcf.rpc.core.annotation.RpcReference;
 import com.lcf.rpc.core.annotation.RpcService;
 import com.lcf.rpc.core.provider.ServiceProviderImpl;
 import com.lcf.rpc.core.proxy.RpcClientProxy;
 import com.lcf.rpc.core.transport.NettyClient;
-import com.lcf.rpc.registry.NacosRegistry;
 import com.lcf.rpc.registry.Registry;
 import lombok.SneakyThrows;
 import lombok.extern.slf4j.Slf4j;
@@ -14,7 +14,6 @@ import org.springframework.beans.factory.config.BeanPostProcessor;
 import org.springframework.stereotype.Component;
 
 import java.lang.reflect.Field;
-import java.net.InetAddress;
 import java.net.InetSocketAddress;
 
 @Slf4j
@@ -26,33 +25,38 @@ public class SpringBeanPostProcessor implements BeanPostProcessor {
     private final RpcClientProxy rpcClientProxy;
 
     public SpringBeanPostProcessor() {
+        System.out.println("========== [Trace] SpringBeanPostProcessor 构造函数开始执行 ==========");
         this.serviceProvider = new ServiceProviderImpl();
-        this.registry = new NacosRegistry();
+
+        try {
+            // 追踪点 1：检查 ExtensionLoader 加载了什么鬼东西
+            Registry zk = ExtensionLoader.getExtensionLoader(Registry.class).getExtension("zookeeper");
+            System.out.println("========== [Trace] SPI 加载结果: " + zk.getClass().getCanonicalName() + " ==========");
+            this.registry = zk;
+        } catch (Exception e) {
+            System.err.println("========== [Trace] SPI 加载失败! ==========");
+            e.printStackTrace();
+            throw e; // 抛出异常，炸掉启动流程
+        }
+
         this.rpcClientProxy = new RpcClientProxy(new NettyClient());
+        System.out.println("========== [Trace] SpringBeanPostProcessor 构造函数执行完毕 ==========");
     }
 
-    /**
-     * 在 Bean 初始化之前执行 (这里我们用不到，直接返回 bean)
-     */
     @Override
     public Object postProcessBeforeInitialization(Object bean, String beanName) throws BeansException {
         return bean;
     }
 
-    /**
-     * ⚠️ 核心逻辑：在 Bean 初始化之后执行
-     */
     @Override
     @SneakyThrows
     public Object postProcessAfterInitialization(Object bean, String beanName) throws BeansException {
         Class<?> targetClass = bean.getClass();
 
-        // --- 逻辑 1：处理服务端 @RpcService ---
         if (targetClass.isAnnotationPresent(RpcService.class)) {
+            System.out.println("========== [Trace] 发现服务类: " + beanName + " ==========");
             RpcService rpcService = targetClass.getAnnotation(RpcService.class);
 
-            // 1. 获取服务接口名
-            // 如果注解里没写 interfaceClass，就默认取第一个接口
             Class<?> interfaceClass;
             if (rpcService.interfaceClass() == void.class) {
                 interfaceClass = targetClass.getInterfaces()[0];
@@ -61,32 +65,30 @@ public class SpringBeanPostProcessor implements BeanPostProcessor {
             }
             String serviceName = interfaceClass.getCanonicalName();
 
-            // 2. 注册到本地缓存 (为了反射调用)
             serviceProvider.addServiceProvider(bean);
+            System.out.println("========== [Trace] 已添加本地缓存: " + serviceName + " ==========");
 
-            // 3. 注册到 Nacos
-            // ⚠️ 这里为了演示简单，硬编码端口 8080，实际生产中应读取配置文件
-            String host = InetAddress.getLocalHost().getHostAddress();
-            int port = 8080;
-            registry.register(serviceName, new InetSocketAddress(host, port));
-
-            log.info("Spring 发现服务，已自动注册: {}", serviceName);
+            // 追踪点 2：准备注册到 Zookeeper
+            try {
+                // ⚠️ 这里为了演示简单，硬编码端口 8080，实际生产中应读取配置文件
+                // 请确保这个端口和你 NettyServer 启动的端口一致！！！
+                registry.register(serviceName, new InetSocketAddress("127.0.0.1", 8080));
+                System.out.println("========== [Trace] Zookeeper 注册方法调用完成: " + serviceName + " ==========");
+            } catch (Exception e) {
+                System.err.println("========== [Trace] Zookeeper 注册炸了! ==========");
+                e.printStackTrace();
+            }
         }
 
-        // --- 逻辑 2：处理客户端 @RpcReference ---
-        // 遍历所有字段，看谁头上顶着 @RpcReference
+        // ... 客户端注入逻辑不变 ...
         Field[] declaredFields = targetClass.getDeclaredFields();
         for (Field field : declaredFields) {
             if (field.isAnnotationPresent(RpcReference.class)) {
-                // 1. 生成代理对象
                 Class<?> interfaceClass = field.getType();
                 Object proxy = rpcClientProxy.getProxy(interfaceClass);
-
-                // 2. 暴力反射注入
                 field.setAccessible(true);
                 field.set(bean, proxy);
-
-                log.info("Spring 发现引用，已自动注入代理: {} -> {}", beanName, field.getName());
+                System.out.println("========== [Trace] 注入代理对象: " + field.getName() + " ==========");
             }
         }
 

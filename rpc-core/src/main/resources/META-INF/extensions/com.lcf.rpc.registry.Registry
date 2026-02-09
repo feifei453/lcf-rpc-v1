@@ -1,0 +1,2 @@
+nacos=com.lcf.rpc.registry.NacosRegistry
+zookeeper=com.lcf.rpc.registry.ZookeeperRegistry
