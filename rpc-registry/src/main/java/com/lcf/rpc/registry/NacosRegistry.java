@@ -23,19 +23,30 @@ public class NacosRegistry implements Registry {
 
     private final NamingService namingService;
 
-    // 1. 本地缓存: serviceName -> list of addresses
+    // 本地缓存: serviceName -> list of addresses
     private final Map<String, List<InetSocketAddress>> serviceCache = new ConcurrentHashMap<>();
 
-    // 2. 记录已订阅的服务，防止重复订阅
+    // 记录已订阅的服务
     private final Set<String> subscribingServices = new HashSet<>();
+
+    // ⚠️ 新增：记录本节点注册过的服务，用于下线时注销
+    // Key: serviceName, Value: address
+    private final Set<String> registeredServiceNames = ConcurrentHashMap.newKeySet();
+    private InetSocketAddress localAddress;
 
     public NacosRegistry() {
         try {
-            // 3. 去硬编码：从配置文件读取 Nacos 地址
             String registryAddress = RpcProperties.getRegistryAddress();
-            // Nacos 工厂创建连接
             this.namingService = NamingFactory.createNamingService(registryAddress);
             log.info("Nacos 连接成功: {}", registryAddress);
+
+            // ⚠️ 核心：添加 JVM 关闭钩子，自动触发优雅下线
+            // 当你按 Ctrl+C 或执行 kill (不带-9) 时，这个线程会被执行
+            Runtime.getRuntime().addShutdownHook(new Thread(() -> {
+                log.info("JVM 正在关闭，开始执行 Nacos 优雅下线...");
+                destroy();
+            }));
+
         } catch (NacosException e) {
             throw new RuntimeException("连接 Nacos 失败", e);
         }
@@ -45,6 +56,11 @@ public class NacosRegistry implements Registry {
     public void register(String serviceName, InetSocketAddress inetSocketAddress) {
         try {
             namingService.registerInstance(serviceName, inetSocketAddress.getHostName(), inetSocketAddress.getPort());
+
+            // 记录下来，以便 destroy 时注销
+            registeredServiceNames.add(serviceName);
+            this.localAddress = inetSocketAddress;
+
             log.info("Nacos 注册服务成功: {} -> {}", serviceName, inetSocketAddress);
         } catch (NacosException e) {
             throw new RuntimeException("Nacos 注册失败", e);
@@ -53,19 +69,15 @@ public class NacosRegistry implements Registry {
 
     @Override
     public List<InetSocketAddress> lookupAll(String serviceName) {
-        // 4. 优先读本地缓存 (性能起飞)
         if (serviceCache.containsKey(serviceName)) {
             return serviceCache.get(serviceName);
         }
 
         try {
-            // 5. 第一次查询：从 Nacos 拉取，并更新缓存
             List<Instance> instances = namingService.selectInstances(serviceName, true);
             List<InetSocketAddress> addressList = instancesToAddressList(instances);
 
             serviceCache.put(serviceName, addressList);
-
-            // 6. 开启订阅 (监听服务变化)
             subscribeService(serviceName);
 
             return addressList;
@@ -74,42 +86,56 @@ public class NacosRegistry implements Registry {
         }
     }
 
+    /**
+     * ⚠️ 核心实现：优雅下线
+     * 主动注销服务，防止客户端继续向已下线的节点发请求
+     */
+    @Override
+    public void destroy() {
+        // 1. 注销所有已注册的服务
+        if (!registeredServiceNames.isEmpty() && localAddress != null) {
+            for (String serviceName : registeredServiceNames) {
+                try {
+                    namingService.deregisterInstance(serviceName, localAddress.getHostName(), localAddress.getPort());
+                    log.info("Nacos 服务注销成功: {}", serviceName);
+                } catch (NacosException e) {
+                    log.error("Nacos 服务注销失败: {}", serviceName, e);
+                }
+            }
+            registeredServiceNames.clear();
+        }
+
+        // 2. 关闭 Nacos 客户端资源 (可选)
+        // namingService.shutDown(); // Nacos Client 1.x 版本可能没有 shutDown，视版本而定
+    }
+
     private void subscribeService(String serviceName) throws NacosException {
-        // 只有没订阅过才订阅，加锁防止并发重复订阅
         synchronized (subscribingServices) {
             if (subscribingServices.contains(serviceName)) {
                 return;
             }
 
             log.info("开启 Nacos 监听: {}", serviceName);
-
-            // Nacos 的事件监听机制
             namingService.subscribe(serviceName, new EventListener() {
                 @Override
                 public void onEvent(Event event) {
                     if (event instanceof NamingEvent) {
                         NamingEvent namingEvent = (NamingEvent) event;
-                        // 获取最新的实例列表
                         List<Instance> instances = namingEvent.getInstances();
                         List<InetSocketAddress> newAddressList = instancesToAddressList(instances);
-
-                        // 更新本地缓存
                         serviceCache.put(serviceName, newAddressList);
-                        log.info("检测到服务 [{}] 变化，更新本地缓存，当前实例数: {}", serviceName, newAddressList.size());
+                        log.info("服务 [{}] 变动，更新缓存，实例数: {}", serviceName, newAddressList.size());
                     }
                 }
             });
-
             subscribingServices.add(serviceName);
         }
     }
 
-    // 辅助方法：把 Nacos 的 Instance 转成我们的 InetSocketAddress
     private List<InetSocketAddress> instancesToAddressList(List<Instance> instances) {
         List<InetSocketAddress> addressList = new ArrayList<>();
         if (instances != null) {
             for (Instance instance : instances) {
-                // 只取健康的实例
                 if (instance.isHealthy() && instance.isEnabled()) {
                     addressList.add(new InetSocketAddress(instance.getIp(), instance.getPort()));
                 }
