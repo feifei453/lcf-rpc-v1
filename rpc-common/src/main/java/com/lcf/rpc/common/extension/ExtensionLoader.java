@@ -11,21 +11,24 @@ import java.util.Map;
 import java.util.concurrent.ConcurrentHashMap;
 
 /**
- * 自定义 SPI 加载器 (简化版 Dubbo SPI)
+ * 自定义 SPI 加载器 (优化版)
+ * 核心优化：
+ * 1. 优化 getExtension 中的 Holder 创建逻辑，利用 putIfAbsent 返回值减少查询。
+ * 2. 规范 DCL 双重检查锁写法。
  */
 @Slf4j
 public class ExtensionLoader<T> {
 
-    // 扩展配置文件的路径，例如 META-INF/extensions/com.lcf.rpc.core.serialization.Serializer
+    // 扩展配置文件的路径
     private static final String EXTENSION_DIR = "META-INF/extensions/";
 
-    // 缓存加载器实例：Map<接口, 加载器>
+    // 全局缓存：加载器实例 Map<接口, 加载器>
     private static final Map<Class<?>, ExtensionLoader<?>> LOADERS = new ConcurrentHashMap<>();
 
-    // 缓存扩展类实例：Map<扩展名, 实例>
+    // 实例缓存：Map<扩展名, Holder<实例>>
     private final Map<String, Holder<Object>> cachedInstances = new ConcurrentHashMap<>();
 
-    // 缓存扩展类字节码：Map<扩展名, Class>
+    // 类缓存：Map<扩展名, Class> (懒加载，只有在调用 getExtensionClasses 时才加载)
     private final Holder<Map<String, Class<?>>> cachedClasses = new Holder<>();
 
     private final Class<T> type;
@@ -35,7 +38,7 @@ public class ExtensionLoader<T> {
     }
 
     /**
-     * 获取某个接口的加载器
+     * 获取接口的加载器 (单例)
      */
     @SuppressWarnings("unchecked")
     public static <T> ExtensionLoader<T> getExtensionLoader(Class<T> type) {
@@ -55,8 +58,8 @@ public class ExtensionLoader<T> {
     }
 
     /**
-     * 获取扩展类实例 (单例)
-     * @param name 扩展名 (例如 "json", "jdk")
+     * 获取扩展类实例 (核心方法)
+     * @param name 扩展名 (例如 "json", "kryo")
      */
     @SuppressWarnings("unchecked")
     public T getExtension(String name) {
@@ -64,20 +67,28 @@ public class ExtensionLoader<T> {
             throw new IllegalArgumentException("Extension name should not be null or empty.");
         }
 
-        // 1. 获取或创建 Holder
+        // 1. 获取 Holder (存放单例的容器)
         Holder<Object> holder = cachedInstances.get(name);
         if (holder == null) {
-            cachedInstances.putIfAbsent(name, new Holder<>());
-            holder = cachedInstances.get(name);
+            Holder<Object> newHolder = new Holder<>();
+            // 利用 putIfAbsent 的原子性
+            // 如果 key 不存在，放入 newHolder 并返回 null (表示成功)
+            // 如果 key 已存在 (被其他线程抢先放入)，返回那个已存在的 holder
+            Holder<Object> previous = cachedInstances.putIfAbsent(name, newHolder);
+            holder = (previous != null) ? previous : newHolder;
         }
 
-        // 2. 双重检查锁创建单例
+        // 2. 双重检查锁 (Double-Checked Locking) 创建单例
         Object instance = holder.get();
+        // 第一次检查 (不加锁)
         if (instance == null) {
             synchronized (holder) {
+                // 第二次检查 (加锁)
                 instance = holder.get();
                 if (instance == null) {
+                    // 创建实例
                     instance = createExtension(name);
+                    // 赋值给 volatile 变量
                     holder.set(instance);
                 }
             }
@@ -85,20 +96,25 @@ public class ExtensionLoader<T> {
         return (T) instance;
     }
 
+    /**
+     * 创建扩展实例 (加载类 -> 实例化)
+     */
     private T createExtension(String name) {
-        // 1. 加载所有扩展类 (读取配置文件)
+        // 加载所有该接口下的扩展类
         Class<?> clazz = getExtensionClasses().get(name);
         if (clazz == null) {
             throw new RuntimeException("No such extension of name " + name);
         }
         try {
-            // 2. 反射实例化
             return (T) clazz.newInstance();
         } catch (Exception e) {
             throw new RuntimeException("Fail to create extension instance: " + name, e);
         }
     }
 
+    /**
+     * 获取所有扩展类 (懒加载 + DCL)
+     */
     private Map<String, Class<?>> getExtensionClasses() {
         Map<String, Class<?>> classes = cachedClasses.get();
         if (classes == null) {
@@ -138,7 +154,6 @@ public class ExtensionLoader<T> {
         try (BufferedReader reader = new BufferedReader(new InputStreamReader(resourceUrl.openStream(), "UTF-8"))) {
             String line;
             while ((line = reader.readLine()) != null) {
-                // 忽略注释 #
                 final int ci = line.indexOf('#');
                 if (ci >= 0) {
                     line = line.substring(0, ci);
@@ -146,7 +161,6 @@ public class ExtensionLoader<T> {
                 line = line.trim();
                 if (line.length() > 0) {
                     try {
-                        // 格式: name=fullClassName
                         final int ei = line.indexOf('=');
                         String name = line.substring(0, ei).trim();
                         String className = line.substring(ei + 1).trim();
@@ -166,7 +180,7 @@ public class ExtensionLoader<T> {
 }
 
 /**
- * 简单的容器，用于持有对象 (类似于 ThreadLocal 的用法，但这里是普通对象)
+ * 简单的容器，用于持有单例对象
  */
 class Holder<T> {
     private volatile T value;

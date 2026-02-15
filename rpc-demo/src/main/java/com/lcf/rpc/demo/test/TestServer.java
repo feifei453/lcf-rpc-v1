@@ -21,7 +21,7 @@ public class TestServer {
         ServiceProviderImpl serviceProvider = new ServiceProviderImpl();
         serviceProvider.addServiceProvider(helloService, HelloService.class.getName());
 
-        // 2. ⚠️ 新增：远程注册 (告诉 Nacos 我在哪)
+        // 2. 新增：远程注册 (告诉 Nacos 我在哪)
         String registryType = RpcProperties.getRegistryType();
         Registry registry = ExtensionLoader.getExtensionLoader(Registry.class).getExtension(registryType);
         // 获取本机 IP (在云服务器或Docker中可能需要特定配置，这里先用 getLocalHost)
