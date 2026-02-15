@@ -1,2 +1,2 @@
-jdk=com.lcf.rpc.core.serialization.JdkSerializer
 json=com.lcf.rpc.core.serialization.JsonSerializer
+kryo=com.lcf.rpc.core.serialization.KryoSerializer

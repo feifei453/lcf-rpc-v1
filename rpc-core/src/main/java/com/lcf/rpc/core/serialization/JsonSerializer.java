@@ -33,6 +33,6 @@ public class JsonSerializer implements Serializer {
 
     @Override
     public byte getCode() {
-        return 2; // 假设 1 是 JDK，2 是 JSON
+        return 1; // 1 是 JDK，2 是 JSON
     }
 }

@@ -11,6 +11,7 @@ import io.netty.channel.ChannelHandlerContext;
 import io.netty.handler.codec.ByteToMessageDecoder;
 import lombok.AllArgsConstructor;
 
+import java.nio.charset.StandardCharsets;
 import java.util.Arrays;
 import java.util.List;
 
@@ -38,7 +39,7 @@ public class RpcMessageDecoder extends ByteToMessageDecoder {
 
         // 4. 读取头部其他信息
         byte version = in.readByte();
-        byte serializerCode = in.readByte(); // 暂时没用到，后面 SPI 根据这个去加载对应的 Serializer
+        byte serializerCode = in.readByte();
         byte messageType = in.readByte();
         int bodyLength = in.readInt(); // 数据长度
 
@@ -53,13 +54,25 @@ public class RpcMessageDecoder extends ByteToMessageDecoder {
         byte[] bodyBytes = new byte[bodyLength];
         in.readBytes(bodyBytes);
 
-        // 7. 反序列化
-        // 根据 messageType 决定转成 Request 还是 Response
+        // 7. 反序列化 (⚠️ 核心修改点)
         Object body;
-        if (messageType == RpcMessageType.REQUEST.getCode()) {
+
+        // 情况 A: 心跳包 (PING/PONG) -> 直接转 String，不走 序列化器
+        if (messageType == RpcMessageType.HEARTBEAT_REQUEST.getCode() ||
+                messageType == RpcMessageType.HEARTBEAT_RESPONSE.getCode()) {
+            body = new String(bodyBytes, StandardCharsets.UTF_8);
+        }
+        // 情况 B: 普通业务请求 -> 转 RpcRequest
+        else if (messageType == RpcMessageType.REQUEST.getCode()) {
             body = serializer.deserialize(bodyBytes, RpcRequest.class);
-        } else {
+        }
+        // 情况 C: 普通业务响应 -> 转 RpcResponse
+        else if (messageType == RpcMessageType.RESPONSE.getCode()) {
             body = serializer.deserialize(bodyBytes, RpcResponse.class);
+        }
+        // 情况 D: 未知类型
+        else {
+            throw new IllegalArgumentException("Unknown message type: " + messageType);
         }
 
         // 8. 封装成 RpcMessage 传递给下一个 Handler

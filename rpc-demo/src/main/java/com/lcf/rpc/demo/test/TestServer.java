@@ -1,5 +1,6 @@
 package com.lcf.rpc.demo.test;
 
+import com.lcf.rpc.common.config.RpcProperties;
 import com.lcf.rpc.common.extension.ExtensionLoader;
 import com.lcf.rpc.core.provider.ServiceProviderImpl;
 import com.lcf.rpc.core.transport.NettyServer;
@@ -18,15 +19,16 @@ public class TestServer {
         // 1. 本地注册 (为了 Handler 能反射调用)
         HelloServiceImpl helloService = new HelloServiceImpl();
         ServiceProviderImpl serviceProvider = new ServiceProviderImpl();
-        serviceProvider.addServiceProvider(helloService);
+        serviceProvider.addServiceProvider(helloService, HelloService.class.getName());
 
         // 2. ⚠️ 新增：远程注册 (告诉 Nacos 我在哪)
-        Registry registry = ExtensionLoader.getExtensionLoader(Registry.class).getExtension("zookeeper");
+        String registryType = RpcProperties.getRegistryType();
+        Registry registry = ExtensionLoader.getExtensionLoader(Registry.class).getExtension(registryType);
         // 获取本机 IP (在云服务器或Docker中可能需要特定配置，这里先用 getLocalHost)
         // 端口我们要和 NettyServer 保持一致
         try {
             String host = InetAddress.getLocalHost().getHostAddress();
-            int port = 8080;
+            int port = RpcProperties.getServerPort();
 
             // 注册 HelloService 接口
             // 注意：serviceProvider.addServiceProvider 里我们是用 getCanonicalName() 注册的

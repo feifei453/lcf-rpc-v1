@@ -22,8 +22,8 @@ public class RpcMessage {
 
     /**
      * 序列化类型:
-     * 1: JDK
-     * 2: JSON
+     * 1: JSON
+     * 2: KRYO
      */
     private byte codec;
 

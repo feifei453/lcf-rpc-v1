@@ -1,6 +1,8 @@
 package com.lcf.rpc.core.proxy;
 
+import com.lcf.rpc.common.config.RpcProperties;
 import com.lcf.rpc.common.enumeration.RpcMessageType;
+import com.lcf.rpc.common.enumeration.SerializerCode;
 import com.lcf.rpc.common.extension.ExtensionLoader;
 import com.lcf.rpc.common.model.RpcMessage;
 import com.lcf.rpc.common.model.RpcRequest;
@@ -9,6 +11,7 @@ import com.lcf.rpc.core.filter.FilterConfig;
 import com.lcf.rpc.core.filter.FilterData;
 import com.lcf.rpc.core.loadbalancer.ConsistentHashLoadBalancer;
 import com.lcf.rpc.core.loadbalancer.LoadBalancer;
+import com.lcf.rpc.core.protection.CircuitBreaker;
 import com.lcf.rpc.core.transport.NettyClient;
 import com.lcf.rpc.registry.Registry;
 import lombok.extern.slf4j.Slf4j;
@@ -19,21 +22,23 @@ import java.lang.reflect.Proxy;
 import java.net.InetSocketAddress;
 import java.util.ArrayList;
 import java.util.List;
+import java.util.Map;
 import java.util.UUID;
 import java.util.concurrent.CompletableFuture;
+import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.TimeUnit;
-import java.util.concurrent.TimeoutException;
 
 @Slf4j
 public class RpcClientProxy implements InvocationHandler {
 
     private final NettyClient nettyClient;
-    // 保持原样：使用 Zookeeper 和 一致性哈希
-    private final Registry registry = ExtensionLoader.getExtensionLoader(Registry.class).getExtension("zookeeper");
-    private final LoadBalancer loadBalancer = new ConsistentHashLoadBalancer();
-
+    private final Registry registry ;
+    private final LoadBalancer loadBalancer ;
+    private static final Map<String, CircuitBreaker> CIRCUIT_BREAKER_MAP = new ConcurrentHashMap<>();
     public RpcClientProxy(NettyClient nettyClient) {
         this.nettyClient = nettyClient;
+        this.registry = ExtensionLoader.getExtensionLoader(Registry.class).getExtension(RpcProperties.getRegistryType());
+        this.loadBalancer = ExtensionLoader.getExtensionLoader(LoadBalancer.class).getExtension(RpcProperties.getLoadBalancer());
     }
 
     @SuppressWarnings("unchecked")
@@ -47,7 +52,12 @@ public class RpcClientProxy implements InvocationHandler {
 
     @Override
     public Object invoke(Object proxy, Method method, Object[] args) throws Throwable {
-        // 1. 构建请求 (逻辑保持不变)
+        // 从配置文件读取字符串
+        String serializerKey = RpcProperties.getSerializer();
+
+        //  通过枚举转换为字节码
+        byte codecCode = SerializerCode.getCodeByString(serializerKey);
+        // 1. 构建请求
         RpcRequest rpcRequest = RpcRequest.builder()
                 .requestId(UUID.randomUUID().toString())
                 .interfaceName(method.getDeclaringClass().getName())
@@ -56,7 +66,7 @@ public class RpcClientProxy implements InvocationHandler {
                 .paramTypes(method.getParameterTypes())
                 .build();
 
-        // ⚠️ 核心新增 1：定义一个本次调用的“临时黑名单”
+        // 定义一个本次调用的“临时黑名单”
         // 用于记录在本次重试循环中失败过的节点地址
         List<String> failedNodeList = new ArrayList<>();
 
@@ -67,7 +77,7 @@ public class RpcClientProxy implements InvocationHandler {
 
         // 3. 构建协议消息 (逻辑保持不变)
         RpcMessage rpcMessage = RpcMessage.builder()
-                .codec((byte) 2) // JSON
+                .codec(codecCode)
                 .messageType(RpcMessageType.REQUEST.getCode())
                 .data(rpcRequest)
                 .build();
@@ -88,18 +98,27 @@ public class RpcClientProxy implements InvocationHandler {
                 // 4.1 服务发现
                 List<InetSocketAddress> addressList = registry.lookupAll(serviceName);
 
+
                 // 4.2 转换地址格式
                 List<String> stringList = new ArrayList<>();
                 for (InetSocketAddress addr : addressList) {
                     stringList.add(addr.getHostString() + ":" + addr.getPort());
                 }
+                //  2. 过滤掉被熔断的节点
+                List<String> availableAddresses = new ArrayList<>();
+                for (String addr : stringList) {
+                    CircuitBreaker breaker = CIRCUIT_BREAKER_MAP.computeIfAbsent(addr, k -> new CircuitBreaker());
+                    if (breaker.allowRequest()) {
+                        availableAddresses.add(addr);
+                    }
+                }
 
-                // ⚠️ 核心新增 2：从候选名单中【剔除】黑名单里的节点
+                // ：从候选名单中剔除黑名单里的节点
                 // 如果 ZK 还没来得及删死节点，我们自己手动在客户端屏蔽它
                 stringList.removeAll(failedNodeList);
 
                 if (stringList.isEmpty()) {
-                    throw new RuntimeException("无可用服务节点 (重试耗尽或所有节点均失败)");
+                    throw new RuntimeException("无可用节点 (全部被熔断或拉黑)");
                 }
 
                 // 4.3 负载均衡选择
@@ -123,15 +142,24 @@ public class RpcClientProxy implements InvocationHandler {
 
                 // 4.8 检查结果
                 if (rpcResponse.getCode() == 200) {
+                    // 6.  调用成功：通知熔断器
+                    CircuitBreaker breaker = CIRCUIT_BREAKER_MAP.get(selectedAddr);
+                    if (breaker != null) {
+                        breaker.recordSuccess();
+                    }
                     return rpcResponse.getData();
                 } else {
                     throw new RuntimeException("服务端业务报错: " + rpcResponse.getMessage());
                 }
 
             } catch (Exception e) {
-                // ⚠️ 核心新增 3：捕获异常，将刚才选中的地址加入黑名单
+                // 捕获异常，将刚才选中的地址加入黑名单
                 if (selectedAddr != null) {
                     log.warn("[第{}次调用] 失败: {}, 将地址 {} 加入临时黑名单", i + 1, e.getMessage(), selectedAddr);
+                    CircuitBreaker breaker = CIRCUIT_BREAKER_MAP.get(selectedAddr);
+                    if (breaker != null) {
+                        breaker.recordFailure();
+                    }
                     failedNodeList.add(selectedAddr);
                 } else {
                     log.warn("[第{}次调用] 失败: {}", i + 1, e.getMessage());

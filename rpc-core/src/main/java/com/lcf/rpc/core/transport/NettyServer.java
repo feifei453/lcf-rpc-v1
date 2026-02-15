@@ -1,5 +1,6 @@
 package com.lcf.rpc.core.transport;
 
+import com.lcf.rpc.common.config.RpcProperties;
 import com.lcf.rpc.common.extension.ExtensionLoader;
 import com.lcf.rpc.common.model.RpcRequest;
 import com.lcf.rpc.common.model.RpcResponse;
@@ -8,7 +9,6 @@ import com.lcf.rpc.core.netty.codec.RpcMessageEncoder;
 import com.lcf.rpc.core.netty.handler.CommonDecoder;
 import com.lcf.rpc.core.netty.handler.CommonEncoder;
 import com.lcf.rpc.core.netty.handler.NettyServerHandler;
-import com.lcf.rpc.core.serialization.JdkSerializer;
 import com.lcf.rpc.core.serialization.Serializer;
 import io.netty.bootstrap.ServerBootstrap;
 import io.netty.channel.ChannelFuture;
@@ -18,7 +18,10 @@ import io.netty.channel.EventLoopGroup;
 import io.netty.channel.nio.NioEventLoopGroup;
 import io.netty.channel.socket.SocketChannel;
 import io.netty.channel.socket.nio.NioServerSocketChannel;
+import io.netty.handler.timeout.IdleStateHandler;
 import lombok.extern.slf4j.Slf4j;
+
+import java.util.concurrent.TimeUnit;
 
 @Slf4j
 public class NettyServer {
@@ -44,8 +47,10 @@ public class NettyServer {
                     .childHandler(new ChannelInitializer<SocketChannel>() {
                         @Override
                         protected void initChannel(SocketChannel ch) {
-                            Serializer serializer = ExtensionLoader.getExtensionLoader(Serializer.class).getExtension("json");
-
+                            String serializerKey = RpcProperties.getSerializer();
+                            Serializer serializer = ExtensionLoader.getExtensionLoader(Serializer.class).getExtension(serializerKey);
+                            log.info("服务端启动，使用序列化器: {}", serializerKey);
+                            ch.pipeline().addLast(new IdleStateHandler(30, 0, 0, TimeUnit.SECONDS));
                             // Pipeline 就像工厂流水线，顺序非常重要！
                             // 📥 入站 (Byte -> Object): 解码器 -> Handler
                             // 📤 出站 (Object -> Byte): 编码器

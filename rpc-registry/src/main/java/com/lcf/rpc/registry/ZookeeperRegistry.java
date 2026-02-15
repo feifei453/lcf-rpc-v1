@@ -1,5 +1,6 @@
 package com.lcf.rpc.registry;
 
+import com.lcf.rpc.common.config.RpcProperties;
 import lombok.extern.slf4j.Slf4j;
 import org.apache.curator.RetryPolicy;
 import org.apache.curator.framework.CuratorFramework;
@@ -33,7 +34,7 @@ public class ZookeeperRegistry implements Registry {
 
         // 2. 创建客户端
         // ⚠️ 这里填你虚拟机的 IP:Port
-        String connectString = "192.168.200.130:2181";
+        String connectString = RpcProperties.getRegistryAddress();
 
         this.client = CuratorFrameworkFactory.builder()
                 .connectString(connectString)

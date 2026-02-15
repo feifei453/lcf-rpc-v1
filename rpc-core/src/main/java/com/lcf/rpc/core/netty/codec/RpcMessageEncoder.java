@@ -1,6 +1,7 @@
 package com.lcf.rpc.core.netty.codec;
 
 import com.lcf.rpc.common.constant.RpcConstants;
+import com.lcf.rpc.common.enumeration.RpcMessageType;
 import com.lcf.rpc.common.model.RpcMessage;
 import com.lcf.rpc.core.serialization.Serializer;
 import io.netty.buffer.ByteBuf;
@@ -26,7 +27,16 @@ public class RpcMessageEncoder extends MessageToByteEncoder<RpcMessage> {
             out.writeByte(msg.getMessageType());
 
             // 5. 序列化 Body
-            byte[] bodyBytes = serializer.serialize(msg.getData());
+            byte[] bodyBytes = null;
+            // 特殊处理心跳包：心跳包没有复杂的 body，不需要走序列化
+            if (msg.getMessageType() == RpcMessageType.HEARTBEAT_REQUEST.getCode() ||
+                    msg.getMessageType() == RpcMessageType.HEARTBEAT_RESPONSE.getCode()) {
+                // 心跳数据直接转字节
+                 bodyBytes = msg.getData().toString().getBytes();
+            } else {
+                // 普通业务数据，走序列化器
+                 bodyBytes = serializer.serialize(msg.getData());
+            }
 
             // 6. 写入数据长度 (4 bytes) - 关键！解决粘包
             out.writeInt(bodyBytes.length);

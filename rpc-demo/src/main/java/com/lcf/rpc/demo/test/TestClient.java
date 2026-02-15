@@ -33,7 +33,7 @@ public class TestClient {
             System.out.println("第 " + (i + 1) + " 次调用成功: " + result);
 
             // 休息一下，方便观察日志
-            Thread.sleep(1000);
+            Thread.sleep(2000);
         }
     }
 }
