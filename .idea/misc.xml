@@ -5,6 +5,13 @@
     <option name="originalFiles">
       <list>
         <option value="$PROJECT_DIR$/pom.xml" />
+        <option value="$PROJECT_DIR$/rpc-transport/pom.xml" />
+        <option value="$PROJECT_DIR$/rpc-serialization/pom.xml" />
+        <option value="$PROJECT_DIR$/rpc-registry/pom.xml" />
+        <option value="$PROJECT_DIR$/rpc-demo/pom.xml" />
+        <option value="$PROJECT_DIR$/rpc-core/pom.xml" />
+        <option value="$PROJECT_DIR$/rpc-common/pom.xml" />
+        <option value="$PROJECT_DIR$/rpc-api/pom.xml" />
       </list>
     </option>
   </component>

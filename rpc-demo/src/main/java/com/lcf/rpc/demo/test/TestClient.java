@@ -1,8 +1,8 @@
 package com.lcf.rpc.demo.test;
 
 import com.lcf.rpc.core.proxy.RpcClientProxy;
-import com.lcf.rpc.core.transport.NettyClient;
 import com.lcf.rpc.demo.api.HelloService; // 引入你的接口
+import com.lcf.rpc.transport.transport.NettyClient;
 
 import java.util.Random;
 

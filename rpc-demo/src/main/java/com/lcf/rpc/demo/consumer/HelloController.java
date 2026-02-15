@@ -1,6 +1,6 @@
 package com.lcf.rpc.demo.consumer;
 
-import com.lcf.rpc.core.annotation.RpcReference;
+import com.lcf.rpc.api.annotation.RpcReference;
 import com.lcf.rpc.demo.api.HelloService;
 import org.springframework.stereotype.Component;
 

@@ -1,8 +1,10 @@
 package com.lcf.rpc.core.spring;
 
-import com.lcf.rpc.core.annotation.RpcReference;
+
+import com.lcf.rpc.api.annotation.RpcReference;
 import com.lcf.rpc.core.proxy.RpcClientProxy;
-import com.lcf.rpc.core.transport.NettyClient;
+
+import com.lcf.rpc.transport.transport.NettyClient;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.beans.BeansException;
 import org.springframework.beans.factory.config.BeanPostProcessor;

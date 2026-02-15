@@ -2,12 +2,11 @@ package com.lcf.rpc.demo.test;
 
 import com.lcf.rpc.common.config.RpcProperties;
 import com.lcf.rpc.common.extension.ExtensionLoader;
-import com.lcf.rpc.core.provider.ServiceProviderImpl;
-import com.lcf.rpc.core.transport.NettyServer;
 import com.lcf.rpc.demo.api.HelloService;
 import com.lcf.rpc.demo.provider.HelloServiceImpl;
-import com.lcf.rpc.registry.NacosRegistry;
 import com.lcf.rpc.registry.Registry;
+import com.lcf.rpc.transport.provider.ServiceProviderImpl;
+import com.lcf.rpc.transport.transport.NettyServer;
 
 import java.net.InetAddress;
 import java.net.InetSocketAddress;
