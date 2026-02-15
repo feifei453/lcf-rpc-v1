@@ -37,13 +37,11 @@ public class NettyClient {
 
     public NettyClient() {
         this.unprocessedRequests = new UnprocessedRequests();
-        // 1. 初始化资源 (只做一次)
         this.eventLoopGroup = new NioEventLoopGroup();
         this.bootstrap = new Bootstrap();
-        // 2. 加载序列化器 (只做一次)
+
         String serializerKey = RpcProperties.getSerializer();
         this.serializer = ExtensionLoader.getExtensionLoader(Serializer.class).getExtension(serializerKey);
-
 
         bootstrap.group(eventLoopGroup)
                 .channel(NioSocketChannel.class)
@@ -52,12 +50,15 @@ public class NettyClient {
                     @Override
                     protected void initChannel(SocketChannel ch) {
                         ChannelPipeline pipeline = ch.pipeline();
-                        // 5秒没写数据，发送心跳
-                        pipeline.addLast(new IdleStateHandler(0, 5, 0, TimeUnit.SECONDS));
-                        // 使用你代码里的类名
+
+                        //配置心跳时间
+                        // readerIdleTime = 15s (15秒没读到数据就触发 READER_IDLE -> 关闭连接)
+                        // writerIdleTime = 5s  (5秒没写数据就触发 WRITER_IDLE -> 发送 PING)
+                        // allIdleTime = 0 (不关心)
+                        pipeline.addLast(new IdleStateHandler(15, 5, 0, TimeUnit.SECONDS));
+
                         pipeline.addLast(new RpcMessageEncoder(serializer));
                         pipeline.addLast(new RpcMessageDecoder(serializer));
-                        // 传入 unprocessedRequests
                         pipeline.addLast(new NettyClientHandler(unprocessedRequests));
                     }
                 });
@@ -65,25 +66,23 @@ public class NettyClient {
 
     @SneakyThrows
     public CompletableFuture<RpcResponse> sendRequest(RpcMessage rpcMessage, InetSocketAddress inetSocketAddress) {
-        // 1. 复用连接！(不再每次都 create 了)
+        // 1. 获取连接 (复用或创建)
         Channel channel = getChannel(inetSocketAddress);
 
         if (!channel.isActive()) {
             channelCache.remove(inetSocketAddress.toString());
-            throw new IllegalStateException("Channel is closed");
+            throw new IllegalStateException("Failed to send request: Channel " + inetSocketAddress + " is closed");
         }
 
-        // 2. 准备 Future
+        // 2. 注册 Future，等待响应
         CompletableFuture<RpcResponse> resultFuture = new CompletableFuture<>();
         RpcRequest request = (RpcRequest) rpcMessage.getData();
-
-        // 3. 注册到 unprocessedRequests
         unprocessedRequests.put(request.getRequestId(), resultFuture);
 
-        // 4. 发送
+        // 3. 发送消息
         channel.writeAndFlush(rpcMessage).addListener((ChannelFutureListener) future -> {
             if (future.isSuccess()) {
-                log.info("请求发送成功: {}", request.getRequestId());
+                log.debug("请求发送成功: {}", request.getRequestId());
             } else {
                 future.channel().close();
                 resultFuture.completeExceptionally(future.cause());
@@ -95,24 +94,27 @@ public class NettyClient {
     }
 
     /**
-     * 核心改进：获取 Channel (带缓存 + 双重检查锁)
+     * 获取 Channel (优化版)
      */
     @SneakyThrows
     private Channel getChannel(InetSocketAddress inetSocketAddress) {
         String key = inetSocketAddress.toString();
 
-        // 第一次检查：如果有且活跃，直接返回
+        // 1. 快速检查缓存
         if (channelCache.containsKey(key)) {
             Channel channel = channelCache.get(key);
             if (channel != null && channel.isActive()) {
                 return channel;
             }
+            // 如果连接不活跃，移除并重新连接
             channelCache.remove(key);
         }
 
-        // 加锁防止多线程并发创建多个连接
+        // 2. 创建连接 (加锁防止并发创建)
+        // 注意：这里仍然使用 synchronized(this) 避免同一个目标地址瞬间建立多条连接
+        // 在生产级优化中，可以用 ConcurrentHashMap<String, Future<Channel>> 来细粒度锁，但当前足以
         synchronized (this) {
-            // 第二次检查
+            // 双重检查
             if (channelCache.containsKey(key)) {
                 Channel channel = channelCache.get(key);
                 if (channel != null && channel.isActive()) {
@@ -120,7 +122,7 @@ public class NettyClient {
                 }
             }
 
-            // 确实没有，才去连接
+            // 真正建立连接
             Channel channel = doConnect(inetSocketAddress);
             channelCache.put(key, channel);
             return channel;
@@ -135,14 +137,13 @@ public class NettyClient {
                 log.info("客户端连接成功: {}", inetSocketAddress.toString());
                 completableFuture.complete(future.channel());
             } else {
-                throw new IllegalStateException("连接失败");
+                throw new IllegalStateException("连接失败: " + inetSocketAddress);
             }
         });
-        // 阻塞等待连接建立，超时设为5秒
+        // 5秒超时
         return completableFuture.get(5, TimeUnit.SECONDS);
     }
 
-    // 这是一个好习惯：应用关闭时释放资源
     public void close() {
         eventLoopGroup.shutdownGracefully();
     }
